@@ -21,8 +21,10 @@ void glowBlue();
 void glowGreen();
 void glowRed();
 void airQuality();
-void waterPump();
+void waterON();
+void waterOFF();
 void getBMEVal();
+int getSoilReading();
 #line 12 "c:/Users/Arjun/Documents/IOT/SmartPlant/SmartPlant/src/SmartPlant.ino"
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
@@ -93,6 +95,9 @@ const int DUST_SENSOR = A2;
 const int WATER_PUMP = D11;
 const int NEOPIXELS = D2;
 
+int moisture;
+bool needWater = true;
+
 void setup() {
 
     //pin INPUT
@@ -121,20 +126,40 @@ void setup() {
 
     // 
     bme.begin();
-    waterPump();
+   
 
 }
 
 void loop() {
+  // check Air Quality 
   if(millis()-airQualityTimer > 5000){
     airQuality();
     airQualityTimer = millis();
   }
-
+  // print BME Values
    if(millis()-bmeTimer > 10000){
     getBMEVal();
     bmeTimer = millis();
   }
+ 
+ if(needWater==true){
+    waterON();
+    if(millis()-pumpTimer > 500){
+      needWater=false;  
+    }
+ }
+ else{
+   waterOFF();
+ }
+
+
+
+    
+   
+
+
+
+
 
  
   //  Serial.println(airQual);
@@ -202,8 +227,6 @@ void glowBlue() {
 void glowGreen(){
   int i;
   int j;
-  unsigned int onTimer;
-  unsigned int offTimer;
     for (j=0; j <50; j++){
       for (i = 0; i < pixel.numPixels(); i++) {
         pixel.setPixelColor(i, pixel.Color(0, 200, 0));
@@ -269,12 +292,14 @@ void airQuality(){
 
 }
 
-void waterPump(){
-
-  digitalWrite(D11,HIGH);
-  delay(500);
-  digitalWrite(D11,LOW);
+void waterON(){
+digitalWrite(WATER_PUMP, HIGH);
 }
+
+void waterOFF(){
+digitalWrite(WATER_PUMP, LOW);
+}
+
 
 void getBMEVal(){
     Serial.print("Temperature = ");
@@ -290,6 +315,12 @@ void getBMEVal(){
     Serial.println(" %");
 }
 
+int getSoilReading(){
+  int moisture;
+  moisture=analogRead(SOIL_SENSOR);
+  return moisture;
+  //Serial.printf("%i \n", moisture);
+}
 // void greenPixels() // light when the plant has connected to the zapier
 // void bmePixels() //
 // void zapier()// have Zapier connect to  an app
