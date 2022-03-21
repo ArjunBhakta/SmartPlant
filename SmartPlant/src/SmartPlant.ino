@@ -17,9 +17,8 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 #include <SPI.h>
 #include <Wire.h>
 
-#define SEALEVELPRESSURE_HPA (1013.25)
-
 Adafruit_BME280 bme; 
+
 // I2C
                      // Adafruit_BME280 bme(BME_CS); // hardware SPI
 // Adafruit_BME280 bme(BME_CS, BME_MOSI, BME_MISO, BME_SCK); // software SPI
@@ -30,7 +29,7 @@ Adafruit_BME280 bme;
 
 // air quality sensor library
 #include "Air_Quality_Sensor.h"
-AirQualitySensor sensor(A0);
+AirQualitySensor sensor(A1);
 int airQual;
 
 // neo pixel library
@@ -70,11 +69,24 @@ Adafruit_MQTT_Publish mqttlocation = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "
 
 unsigned long airQualityTimer;
 unsigned long pumpTimer;
+unsigned long bmeTimer;
+
+//
+const int SOIL_SENSOR= A0;
+const int AIR_QUALITY_SENSOR = A1;
+const int DUST_SENSOR = A2;
+const int WATER_PUMP = D11;
+const int NEOPIXELS = D2;
 
 void setup() {
 
-    pinMode(A0, INPUT);
-    pinMode(D2, OUTPUT);
+    //pin INPUT
+    pinMode(SOIL_SENSOR, INPUT);
+    pinMode(AIR_QUALITY_SENSOR,INPUT);
+    pinMode(DUST_SENSOR, INPUT);
+    //pin OUTPUT
+    pinMode(NEOPIXELS, OUTPUT);
+    pinMode (WATER_PUMP, OUTPUT);
 
     Serial.begin(9600);
     while (!Serial)
@@ -94,21 +106,24 @@ void setup() {
 
     // 
     bme.begin();
-    pinMode(D11,OUTPUT);
     waterPump();
 
 }
 
 void loop() {
-  // if(millis()-airQualityTimer > 10000){
-  //   airQuality();
-  //   airQualityTimer = millis();
-  // }
+  if(millis()-airQualityTimer > 5000){
+    airQuality();
+    airQualityTimer = millis();
+  }
 
+   if(millis()-bmeTimer > 10000){
+    getBMEVal();
+    bmeTimer = millis();
+  }
 
  
   //  Serial.println(airQual);
-  //   flashRed();
+   //glowBlue();
 
   //   flashRed();
   //   delay(500);
@@ -168,15 +183,18 @@ void glowBlue() {
     }
 
 }
-// utilize when connected to Zapier
+// utilize when 
 void glowGreen(){
   int i;
-    int j;
+  int j;
+  unsigned int onTimer;
+  unsigned int offTimer;
     for (j=0; j <50; j++){
       for (i = 0; i < pixel.numPixels(); i++) {
         pixel.setPixelColor(i, pixel.Color(0, 200, 0));
         pixel.setBrightness(j);
         pixel.show();
+
         delay(3);
     }
     }
@@ -191,14 +209,29 @@ void glowGreen(){
 
 }
 
-// void greenPixels() // light when the plant has connected to the zapier
-// void bmePixels() //
-// void zapier()// have Zapier connect to  an app
-// void OLED Display()
-// void mqqt() // look back at example to start publishing data
-
+void glowRed() {
+    int i;
+    int j;
+    for (j=0; j <50; j++){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i, pixel.Color(255, 0, 0));
+        pixel.setBrightness(j);
+        pixel.show();
+        delay(3);
+    }
+    }
+    for (j=50; j >0; j--){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i, pixel.Color(255, 0, 0));
+        pixel.setBrightness(j);
+        pixel.show();
+        delay(3);
+    }
+    }
+}
 
 void airQuality(){
+
 
   int quality = sensor.slope();
   Serial.print("Sensor value: ");
@@ -206,7 +239,7 @@ void airQuality(){
 
   if (quality == AirQualitySensor::FORCE_SIGNAL) {
     Serial.println("High pollution! Force signal active.");
-    glowBlue();
+    glowRed();
   }
   else if (quality == AirQualitySensor::HIGH_POLLUTION) {
     Serial.println("High pollution!");
@@ -221,8 +254,29 @@ void airQuality(){
 
 }
 
-void  waterPump(){
+void waterPump(){
+
   digitalWrite(D11,HIGH);
   delay(500);
   digitalWrite(D11,LOW);
 }
+
+void getBMEVal(){
+    Serial.print("Temperature = ");
+    Serial.print(bme.readTemperature());
+    Serial.println(" *C");
+
+    Serial.print("Pressure = ");
+    Serial.print(bme.readPressure() / 100.0F);
+    Serial.println(" hPa");
+
+    Serial.print("Humidity = ");
+    Serial.print(bme.readHumidity());
+    Serial.println(" %");
+}
+
+// void greenPixels() // light when the plant has connected to the zapier
+// void bmePixels() //
+// void zapier()// have Zapier connect to  an app
+// void OLED Display()
+// void mqqt() // look back at example to start publishing data
