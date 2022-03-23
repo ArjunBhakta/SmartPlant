@@ -119,6 +119,10 @@ unsigned long lastTime;
 unsigned long publishTime;
 bool needWater = true;
 bool timerStart = true;
+unsigned long getDustTimer;
+unsigned long soilTimer;
+unsigned long waterButtonTimer;
+
 
 // Dust Sensor Variables 
 unsigned long duration;
@@ -128,6 +132,9 @@ unsigned long lowPulseOccupancy = 0;
 unsigned long last;
 float ratio = 0;
 float concentration = 0;
+
+bool waterButtonState;
+bool prevWaterButtonState;
 
 void setup() {
 
@@ -195,14 +202,13 @@ void loop() {
         last = millis();
     }
   
-
   // check Air Quality every 5 seconds
-  if(millis()-airQualityTimer > 5000){
+  if(millis()-airQualityTimer > 30000){
     airQuality();
     airQualityTimer = millis();
   }
   // print BME Values every 10 seconds
-   if(millis()-bmeTimer > 10000){
+   if(millis()-bmeTimer > 40000){
     getBMEVal();
     bmeTimer = millis();
   }
@@ -215,6 +221,7 @@ void loop() {
      pumpTimer=millis();
      timerStart=false;
    }
+ 
     if(millis()-pumpTimer > 300){
       needWater=false;
       if(needWater==false){
@@ -227,33 +234,47 @@ void loop() {
 
  // Subscription Packages
     Adafruit_MQTT_Subscribe *subscription;
+  
     while ((subscription = mqtt.readSubscription(100))) {
         if (subscription == &mqttWater) {
-            needWater = atof((char *)mqttWater.lastread);
-            Serial.printf("Received %i from Adafruit.io feed LEDstate \n", needWater);
-
+          
+            waterButtonState = atof((char *)mqttWater.lastread);
+            if (millis()-waterButtonTimer>500){
+              prevWaterButtonState= waterButtonState;
+              waterButtonTimer= millis();
+            }
+            
+            if (waterButtonState != prevWaterButtonState){
+              needWater= true;
+              timerStart= true;
+            } 
+            else{
+              needWater= false;
+              timerStart= false;
+            }
+            
+            Serial.printf("Received %i from Adafruit.io feed needWater \n", waterButtonState);
         }
     }
+
  // publish to adafruit.io every 10 seconds
  
  if ((millis() - publishTime > 60000)) {
         if (mqtt.Update()) {
-
           mqttSoilMoisture.publish(moisture);
           mqttAirQuality.publish(quality);
           mqttTemp.publish(temp);
           mqttHumidity.publish(humidity);
           mqttDust.publish(concentration);
-          
           Serial.printf("Publishing to adafruit.io");
         }
         publishTime = millis();
     }
 
-// dust sensor
-  duration = pulseIn(DUST_SENSOR, LOW);
+// dust sensor every 40 seconds
+if (millis() - getDustTimer > 40000){
+ duration = pulseIn(DUST_SENSOR, LOW);
   lowPulseOccupancy = lowPulseOccupancy+duration;
- 
   if ((millis()-dustStartTime) >= sampleTime_ms)//if the sampel time = = 30s
   {
     ratio = lowPulseOccupancy/(sampleTime_ms*10.0);  // Integer percentage 0=&gt;100
@@ -262,8 +283,21 @@ void loop() {
     lowPulseOccupancy = 0;
     dustStartTime = millis();
   }
+  getDustTimer = millis();
+}
+
+ 
+
+
+
 // get soil Reading
- SoilReading();
+// check if soil is less than desired moisture level every 30 minutes
+if (millis() - soilTimer > 100000){
+ if (SoilReading() <3000){
+    //needWater= true;
+ }
+ soilTimer=millis();
+}
 
 // Current Time
     currentTime = millis();
@@ -376,7 +410,7 @@ void getBMEVal(){
 
     temp = ((bme.readTemperature()*(1.8))+32);
     humidity = bme.readHumidity();
-    Serial.printf("Temperature F = %i\ Humididty= %i %",temp,humidity);
+    Serial.printf("Temperature F = %i, Humididty= %i %",temp,humidity);
     //
 }
 
