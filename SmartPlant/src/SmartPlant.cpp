@@ -16,7 +16,10 @@
 #include "Particle.h"
 void setup();
 void loop();
+void glowColor();
 void glowBlue();
+void glowYellow();
+void glowOrange();
 void glowGreen();
 void glowRed();
 void airQuality();
@@ -94,7 +97,7 @@ Adafruit_MQTT_Publish mqttDust = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/fee
 Adafruit_MQTT_Subscribe mqttCheckAir = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/smartplant.manualcheckairquality");
 Adafruit_MQTT_Subscribe mqttWater = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/smartplant.manualwater");
 Adafruit_MQTT_Subscribe mqttLightPixels = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/smartplant.manuallightpixels");
-
+Adafruit_MQTT_Subscribe mqttColor = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/smartplant.color");
 
 // Declare Global Variables
 
@@ -135,6 +138,12 @@ float concentration = 0;
 
 bool waterButtonState;
 bool prevWaterButtonState;
+bool LEDState;
+bool CheckAirState;
+
+// colorPicker 
+int color;
+byte buf [6];
 
 void setup() {
 
@@ -160,6 +169,7 @@ void setup() {
     mqtt.subscribe(&mqttCheckAir);
     mqtt.subscribe(&mqttWater);
     mqtt.subscribe(&mqttLightPixels);
+    mqtt.subscribe(&mqttColor);
 
     // airQuality Sensor
     Serial.begin(9600);
@@ -202,26 +212,24 @@ void loop() {
         last = millis();
     }
   
-  // check Air Quality every 5 seconds
+  // check Air Quality every 1 hour 
   if(millis()-airQualityTimer > 30000){
     airQuality();
     airQualityTimer = millis();
   }
-  // print BME Values every 10 seconds
-   if(millis()-bmeTimer > 40000){
+  // print BME Values every 60 seconds
+   if(millis()-bmeTimer > 60000){
     getBMEVal();
     bmeTimer = millis();
   }
  
-// WaterPlant
-
+// WaterPlant()
  if(needWater==true){  
    waterON();
    if (timerStart == true){
      pumpTimer=millis();
      timerStart=false;
    }
- 
     if(millis()-pumpTimer > 300){
       needWater=false;
       if(needWater==false){
@@ -231,34 +239,49 @@ void loop() {
       }  
     }
  }
-
  // Subscription Packages
-    Adafruit_MQTT_Subscribe *subscription;
-  
-    while ((subscription = mqtt.readSubscription(100))) {
+  Adafruit_MQTT_Subscribe *subscription;
+  // Water Plant Manually
+    while ((subscription = mqtt.readSubscription(1000))) {
         if (subscription == &mqttWater) {
-          
-            waterButtonState = atof((char *)mqttWater.lastread);
-            if (millis()-waterButtonTimer>500){
-              prevWaterButtonState= waterButtonState;
+            prevWaterButtonState= waterButtonState;
+          if (millis()-waterButtonTimer>500){
+              waterButtonState = atof((char *)mqttWater.lastread);
               waterButtonTimer= millis();
-            }
-            
-            if (waterButtonState != prevWaterButtonState){
-              needWater= true;
-              timerStart= true;
-            } 
-            else{
-              needWater= false;
-              timerStart= false;
-            }
-            
-            Serial.printf("Received %i from Adafruit.io feed needWater \n", waterButtonState);
+                if (waterButtonState != prevWaterButtonState){
+                  needWater= true;
+                  timerStart= true;
+                } 
+                else{
+                  needWater= false;
+                } 
+          }
+        Serial.printf("Received %i from Adafruit.io feed needWater \n", waterButtonState);
+        }     
+  // Glow Pixels Manually
+        if (subscription == &mqttColor) {
+            Serial.printf (" Received from Adafruit : %s \n" ,( char *)mqttColor.lastread);
+            memcpy(buf,&mqttColor.lastread [1] ,6); // strip off the ’#’
+            Serial.printf(" Buffer : %s \n" ,( char *) buf );
+            color = strtol((char *) buf ,NULL ,16) ; // convert string to int (hex)
+            Serial.printf ("Buffer : 0x%02X \n",color);
         }
-    }
-
- // publish to adafruit.io every 10 seconds
- 
+        if(subscription == &mqttLightPixels){
+            LEDState = atof((char *)mqttLightPixels.lastread);  
+            if (LEDState==true){
+            glowColor();
+            Serial.printf("Received %i from Adafruit.io feed pixel \n", LEDState);
+            }
+        }
+        if(subscription == &mqttCheckAir){
+            CheckAirState = atof((char*)mqttCheckAir.lastread);  
+            if (CheckAirState==true){
+            //Serial.printf("Received %i from Adafruit.io feed pixel \n", LEDState);
+            airQuality();
+            }
+        }
+  }
+ // publish to adafruit.io every 60 seconds
  if ((millis() - publishTime > 60000)) {
         if (mqtt.Update()) {
           mqttSoilMoisture.publish(moisture);
@@ -271,8 +294,8 @@ void loop() {
         publishTime = millis();
     }
 
-// dust sensor every 40 seconds
-if (millis() - getDustTimer > 40000){
+// dust sensor every 90 seconds
+if (millis() - getDustTimer > 90000){
  duration = pulseIn(DUST_SENSOR, LOW);
   lowPulseOccupancy = lowPulseOccupancy+duration;
   if ((millis()-dustStartTime) >= sampleTime_ms)//if the sampel time = = 30s
@@ -285,10 +308,6 @@ if (millis() - getDustTimer > 40000){
   }
   getDustTimer = millis();
 }
-
- 
-
-
 
 // get soil Reading
 // check if soil is less than desired moisture level every 30 minutes
@@ -316,20 +335,77 @@ if (millis() - soilTimer > 100000){
     }
 }
 
-// lights neo pixels with blue // utlize if plant has been watered
-void glowBlue(){
+void glowColor(){
   int i;
   int j;
     for (j=0; j <75; j=j+2){
       for (i = 0; i < pixel.numPixels(); i++) {
-        pixel.setPixelColor(i, pixel.Color(0, 0, 200));
+        pixel.setPixelColor(i, color);
         pixel.setBrightness(j);
         pixel.show(); 
       }
     }
     for (j=75; j >-1; j--){
       for (i = 0; i < pixel.numPixels(); i++) {
-        pixel.setPixelColor(i, pixel.Color(0, 0, 200));
+        pixel.setPixelColor(i,color);
+        pixel.setBrightness(j);
+        pixel.show(); 
+      }
+    }
+}
+
+// lights neo pixels with blue // utlize if plant has been watered
+void glowBlue(){
+  int i;
+  int j;
+    for (j=0; j <75; j=j+2){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i, 0x0000FF);
+        pixel.setBrightness(j);
+        pixel.show(); 
+      }
+    }
+    for (j=75; j >-1; j--){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i,0x0000FF);
+        pixel.setBrightness(j);
+        pixel.show(); 
+      }
+    }
+}
+
+void glowYellow(){
+  int i;
+  int j;
+    for (j=0; j <75; j=j+2){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i, 0xfff600);
+        pixel.setBrightness(j);
+        pixel.show(); 
+      }
+    }
+    for (j=75; j >-1; j--){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i,0xfff600);
+        pixel.setBrightness(j);
+        pixel.show(); 
+      }
+    }
+}
+
+void glowOrange(){
+  int i;
+  int j;
+    for (j=0; j <75; j=j+2){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i, 0xff9100);
+        pixel.setBrightness(j);
+        pixel.show(); 
+      }
+    }
+    for (j=75; j >-1; j--){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i,0xff9100);
         pixel.setBrightness(j);
         pixel.show(); 
       }
@@ -341,7 +417,7 @@ void glowGreen(){
   int j;
     for (j=0; j <75; j=j+2){
       for (i = 0; i < pixel.numPixels(); i++) {
-        pixel.setPixelColor(i, pixel.Color(0, 200, 0));
+        pixel.setPixelColor(i, 0x0000FF);
         pixel.setBrightness(j);
         pixel.show(); 
       }
@@ -387,15 +463,16 @@ void airQuality(){
   }
   else if (quality == AirQualitySensor::HIGH_POLLUTION) {
     Serial.println("High pollution!");
+    glowOrange();
   }
   else if (quality == AirQualitySensor::LOW_POLLUTION) {
     Serial.println("Low pollution!");
-  }
+    glowYellow();  
+    }
   else if (quality == AirQualitySensor::FRESH_AIR) {
     Serial.println("Fresh air.");
-   // glowGreen();
+    glowGreen();
   }
-
 }
 
 void waterON(){
@@ -410,7 +487,7 @@ void getBMEVal(){
 
     temp = ((bme.readTemperature()*(1.8))+32);
     humidity = bme.readHumidity();
-    Serial.printf("Temperature F = %i, Humididty= %i %",temp,humidity);
+    //Serial.printf("Temperature F = %i, Humididty= %i %",temp,humidity);
     //
 }
 
@@ -455,4 +532,3 @@ void MQTT_connect() {
 
 
 // void zapier()// have Zapier connect to  an app
-// void mqqt() // look back at example to start publishing data
