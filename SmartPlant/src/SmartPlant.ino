@@ -69,8 +69,8 @@ Adafruit_MQTT_SPARK mqtt(&TheClient, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, A
 //  Notice MQTT paths for AIO follow the form: <username>/feeds/<feedname>
 Adafruit_MQTT_Publish mqttSoilMoisture = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.soilmoisture");
 Adafruit_MQTT_Publish mqttAirQuality = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.airquality");
-Adafruit_MQTT_Publish mqttTemp = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/	smartplant.temp");
-Adafruit_MQTT_Publish mqttHumidity = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/ smartplant.humidity");
+Adafruit_MQTT_Publish mqttTemp = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.temp");
+Adafruit_MQTT_Publish mqttHumidity = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.humidity");
 Adafruit_MQTT_Publish mqttDust = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.dust");
 //  Setup Feeds to subscribe
 Adafruit_MQTT_Subscribe mqttCheckAir = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/smartplant.manualcheckairquality");
@@ -83,6 +83,7 @@ Adafruit_MQTT_Subscribe mqttLightPixels = Adafruit_MQTT_Subscribe(&mqtt, AIO_USE
 int moisture;
 int temp;
 int humidity;
+int quality;
 
 // PINS
 const int SOIL_SENSOR= A0;
@@ -97,6 +98,7 @@ unsigned long pumpTimer;
 unsigned long bmeTimer;
 unsigned long currentTime;
 unsigned long lastTime;
+unsigned long publishTime;
 bool needWater = true;
 bool timerStart = true;
 
@@ -174,7 +176,7 @@ void loop() {
         }
         last = millis();
     }
-    // 
+  
 
   // check Air Quality every 5 seconds
   if(millis()-airQualityTimer > 5000){
@@ -187,37 +189,51 @@ void loop() {
     bmeTimer = millis();
   }
  
+// WaterPlant
+
  if(needWater==true){  
    waterON();
    if (timerStart == true){
      pumpTimer=millis();
      timerStart=false;
    }
-    if(millis()-pumpTimer > 250){
+    if(millis()-pumpTimer > 300){
       needWater=false;
       if(needWater==false){
         waterOFF();
+        glowBlue();
+        timerStart=true;
       }  
     }
  }
 
- // publish to adafruit.io every 6 seconds
- 
- if ((millis() - publishTime > 6000)) {
-        if (mqtt.Update()) {
-
-          mqttSoilMoisture.publish
-          mqttAirQuality.publish
-          mqttTemp.publish
-          mqttHumidity.publish
-          mqttDust.publish
-            mqttRandomNumber.publish(randomNumber);
-            Serial.printf("Publishing %0.2f \n", randomNumber);
+ // Subscription Packages
+    Adafruit_MQTT_Subscribe *subscription;
+    while ((subscription = mqtt.readSubscription(100))) {
+        if (subscription == &mqttWater) {
+            needWater = atof((char *)mqttWater.lastread);
+            Serial.printf("Received %i from Adafruit.io feed needWater \n", needWater);
         }
-        lastTime = millis();
     }
 
 
+ // publish to adafruit.io every 10 seconds
+ 
+ if ((millis() - publishTime > 60000)) {
+        if (mqtt.Update()) {
+
+          mqttSoilMoisture.publish(moisture);
+          mqttAirQuality.publish(quality);
+          mqttTemp.publish(temp);
+          mqttHumidity.publish(humidity);
+          mqttDust.publish(concentration);
+          
+          Serial.printf("Publishing to adafruit.io");
+        }
+        publishTime = millis();
+    }
+
+// dust sensor
   duration = pulseIn(DUST_SENSOR, LOW);
   lowPulseOccupancy = lowPulseOccupancy+duration;
  
@@ -229,11 +245,14 @@ void loop() {
     lowPulseOccupancy = 0;
     dustStartTime = millis();
   }
+// get soil Reading
+// check if soil is less than desired moisture level every 30 minutes
+ if (SoilReading() <3000){
+    //needWater= true;
+ }
 
- SoilReading();
-
- currentTime = millis();
-
+// Current Time
+    currentTime = millis();
     if ((currentTime - lastTime) > 2000) {
         DateTime = Time.timeStr();
         TimeOnly = DateTime.substring(11, 19);
@@ -249,13 +268,6 @@ void loop() {
     }
 }
 
-
-// void readSoil() // function to read the current moisture level in the soil ( //empty cup 3478, submerged in water 1780, dry soil 3466, 2216 little bit of water- 1800damp)
-// void waterPlant() // function that waters plant for .5 sec
-
-
-// NEOPIXEL FUNCTIONS*******************************************************************//
-
 // lights neo pixels with blue // utlize if plant has been watered
 void glowBlue(){
   int i;
@@ -267,7 +279,7 @@ void glowBlue(){
         pixel.show(); 
       }
     }
-    for (j=75; j >-1; j=j-2){
+    for (j=75; j >-1; j--){
       for (i = 0; i < pixel.numPixels(); i++) {
         pixel.setPixelColor(i, pixel.Color(0, 0, 200));
         pixel.setBrightness(j);
@@ -317,7 +329,7 @@ void glowRed(){
 void airQuality(){
 
 
-  int quality = sensor.slope();
+  quality = sensor.slope();
   Serial.print("Sensor value: ");
   Serial.println(sensor.getValue());
 
@@ -333,7 +345,7 @@ void airQuality(){
   }
   else if (quality == AirQualitySensor::FRESH_AIR) {
     Serial.println("Fresh air.");
-    glowGreen();
+   // glowGreen();
   }
 
 }
@@ -350,7 +362,7 @@ void getBMEVal(){
 
     temp = ((bme.readTemperature()*(1.8))+32);
     humidity = bme.readHumidity();
-    Serial.printf("Temperature F = %i\ Humididty= %i %", temp, humidity);
+    Serial.printf("Temperature F = %i\ Humididty= %i %",temp,humidity);
     //
 }
 

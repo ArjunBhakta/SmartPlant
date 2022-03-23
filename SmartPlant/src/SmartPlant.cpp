@@ -25,6 +25,7 @@ void waterOFF();
 void getBMEVal();
 int SoilReading();
 void screen();
+void MQTT_connect();
 #line 12 "c:/Users/Arjun/Documents/IOT/SmartPlant/SmartPlant/src/SmartPlant.ino"
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
@@ -82,18 +83,25 @@ TCPClient TheClient;
 Adafruit_MQTT_SPARK mqtt(&TheClient, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
 
 // Feeds(Publish and Subscibe) to adafruit.io
-//  Setup Feeds to publish or subscribe
+//  Setup Feeds to publish
 //  Notice MQTT paths for AIO follow the form: <username>/feeds/<feedname>
-Adafruit_MQTT_Publish mqttRandomNumber = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/randomNumber");
-Adafruit_MQTT_Subscribe mqttButton = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/buttonOnOff");
-Adafruit_MQTT_Subscribe mqttSlider = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/LEDrange");
-Adafruit_MQTT_Publish mqttlocation = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/location");
+Adafruit_MQTT_Publish mqttSoilMoisture = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.soilmoisture");
+Adafruit_MQTT_Publish mqttAirQuality = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.airquality");
+Adafruit_MQTT_Publish mqttTemp = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.temp");
+Adafruit_MQTT_Publish mqttHumidity = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.humidity");
+Adafruit_MQTT_Publish mqttDust = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/smartplant.dust");
+//  Setup Feeds to subscribe
+Adafruit_MQTT_Subscribe mqttCheckAir = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/smartplant.manualcheckairquality");
+Adafruit_MQTT_Subscribe mqttWater = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/smartplant.manualwater");
+Adafruit_MQTT_Subscribe mqttLightPixels = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/smartplant.manuallightpixels");
+
 
 // Declare Global Variables
 
 int moisture;
 int temp;
 int humidity;
+int quality;
 
 // PINS
 const int SOIL_SENSOR= A0;
@@ -108,6 +116,7 @@ unsigned long pumpTimer;
 unsigned long bmeTimer;
 unsigned long currentTime;
 unsigned long lastTime;
+unsigned long publishTime;
 bool needWater = true;
 bool timerStart = true;
 
@@ -116,6 +125,7 @@ unsigned long duration;
 unsigned long dustStartTime;
 unsigned long sampleTime_ms = 2000;//sampe 30s&nbsp;;
 unsigned long lowPulseOccupancy = 0;
+unsigned long last;
 float ratio = 0;
 float concentration = 0;
 
@@ -130,12 +140,19 @@ void setup() {
     pinMode(NEOPIXELS, OUTPUT);
     pinMode (WATER_PUMP, OUTPUT);
 
-    // OLED
-    display.begin(SSD1306_SWITCHCAPVCC, 0x3c);
-    display.clearDisplay();
-    Time.zone(-6);
-    Particle.syncTime();
-    lastTime = millis();
+    // wait for Serial Monitor to startup
+    waitFor(Serial.isConnected, 15000); 
+
+    // Connect to WiFi without going to Particle Cloud
+    WiFi.connect();
+    while (WiFi.connecting()) {
+        Serial.printf(".");
+    }
+
+    // Setup MQTT subscription for onoff feed.
+    mqtt.subscribe(&mqttCheckAir);
+    mqtt.subscribe(&mqttWater);
+    mqtt.subscribe(&mqttLightPixels);
 
     // airQuality Sensor
     Serial.begin(9600);
@@ -149,6 +166,13 @@ void setup() {
         Serial.println("Sensor ERROR!");
     }
 
+    // OLED
+    display.begin(SSD1306_SWITCHCAPVCC, 0x3c);
+    display.clearDisplay();
+    Time.zone(-6);
+    Particle.syncTime();
+    lastTime = millis();
+
     // neopixel setup
     pixel.begin();
     pixel.show();
@@ -156,11 +180,22 @@ void setup() {
     // 
     bme.begin();
 
-   
-
 }
 
 void loop() {
+   // Validate connected to MQTT Broker
+    MQTT_connect();
+   // Ping MQTT Broker every 2 minutes to keep connection alive
+    if ((millis() - last) > 120000) {
+        Serial.printf("Pinging MQTT \n");
+        if (!mqtt.ping()) {
+            Serial.printf("Disconnecting \n");
+            mqtt.disconnect();
+        }
+        last = millis();
+    }
+  
+
   // check Air Quality every 5 seconds
   if(millis()-airQualityTimer > 5000){
     airQuality();
@@ -172,21 +207,50 @@ void loop() {
     bmeTimer = millis();
   }
  
+// WaterPlant
+
  if(needWater==true){  
    waterON();
    if (timerStart == true){
      pumpTimer=millis();
      timerStart=false;
    }
-    if(millis()-pumpTimer > 250){
+    if(millis()-pumpTimer > 300){
       needWater=false;
       if(needWater==false){
         waterOFF();
+        glowBlue();
+        timerStart=true;
       }  
     }
  }
 
+ // Subscription Packages
+    Adafruit_MQTT_Subscribe *subscription;
+    while ((subscription = mqtt.readSubscription(100))) {
+        if (subscription == &mqttWater) {
+            needWater = atof((char *)mqttWater.lastread);
+            Serial.printf("Received %i from Adafruit.io feed LEDstate \n", needWater);
 
+        }
+    }
+ // publish to adafruit.io every 10 seconds
+ 
+ if ((millis() - publishTime > 60000)) {
+        if (mqtt.Update()) {
+
+          mqttSoilMoisture.publish(moisture);
+          mqttAirQuality.publish(quality);
+          mqttTemp.publish(temp);
+          mqttHumidity.publish(humidity);
+          mqttDust.publish(concentration);
+          
+          Serial.printf("Publishing to adafruit.io");
+        }
+        publishTime = millis();
+    }
+
+// dust sensor
   duration = pulseIn(DUST_SENSOR, LOW);
   lowPulseOccupancy = lowPulseOccupancy+duration;
  
@@ -198,11 +262,11 @@ void loop() {
     lowPulseOccupancy = 0;
     dustStartTime = millis();
   }
-
+// get soil Reading
  SoilReading();
 
- currentTime = millis();
-
+// Current Time
+    currentTime = millis();
     if ((currentTime - lastTime) > 2000) {
         DateTime = Time.timeStr();
         TimeOnly = DateTime.substring(11, 19);
@@ -218,13 +282,6 @@ void loop() {
     }
 }
 
-
-// void readSoil() // function to read the current moisture level in the soil ( //empty cup 3478, submerged in water 1780, dry soil 3466, 2216 little bit of water- 1800damp)
-// void waterPlant() // function that waters plant for .5 sec
-
-
-// NEOPIXEL FUNCTIONS*******************************************************************//
-
 // lights neo pixels with blue // utlize if plant has been watered
 void glowBlue(){
   int i;
@@ -236,7 +293,7 @@ void glowBlue(){
         pixel.show(); 
       }
     }
-    for (j=75; j >-1; j=j-2){
+    for (j=75; j >-1; j--){
       for (i = 0; i < pixel.numPixels(); i++) {
         pixel.setPixelColor(i, pixel.Color(0, 0, 200));
         pixel.setBrightness(j);
@@ -286,7 +343,7 @@ void glowRed(){
 void airQuality(){
 
 
-  int quality = sensor.slope();
+  quality = sensor.slope();
   Serial.print("Sensor value: ");
   Serial.println(sensor.getValue());
 
@@ -302,7 +359,7 @@ void airQuality(){
   }
   else if (quality == AirQualitySensor::FRESH_AIR) {
     Serial.println("Fresh air.");
-    glowGreen();
+   // glowGreen();
   }
 
 }
@@ -319,7 +376,7 @@ void getBMEVal(){
 
     temp = ((bme.readTemperature()*(1.8))+32);
     humidity = bme.readHumidity();
-    Serial.printf("Temperature F = %i\ Humididty= %i %", temp, humidity);
+    Serial.printf("Temperature F = %i\ Humididty= %i %",temp,humidity);
     //
 }
 
@@ -328,8 +385,6 @@ int SoilReading(){
   return moisture;
   //Serial.printf("%i \n", moisture);
 }
-// void greenPixels() // light when the plant has connected to the zapier
-// void bmePixels() //
 
 void screen() {
     display.clearDisplay();
@@ -343,6 +398,25 @@ void screen() {
     display.printf("SoilMoisture= %i\n", moisture);
     display.printf("dust = %f pcs/0.01cf \n",concentration);
     display.display();
+}
+
+void MQTT_connect() {
+    int8_t ret;
+
+    // Stop if already connected.
+    if (mqtt.connected()) {
+        return;
+    }
+
+    Serial.print("Connecting to MQTT... ");
+
+    while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
+        Serial.printf("%s\n", (char *)mqtt.connectErrorString(ret));
+        Serial.printf("Retrying MQTT connection in 5 seconds..\n");
+        mqtt.disconnect();
+        delay(5000); // wait 5 seconds
+    }
+    Serial.printf("MQTT Connected!\n");
 }
 
 
