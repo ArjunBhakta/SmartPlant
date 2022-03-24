@@ -7,7 +7,7 @@
  * Project SmartPlant
  * Description: Smart watering system
  * Author: Arjun Bhakta
- * Date: 18-March-2022
+ * Date: 23-March-2022
  */
 
 // libraries
@@ -18,17 +18,19 @@ void setup();
 void loop();
 void glowColor();
 void glowBlue();
+void glowGreen();
 void glowYellow();
 void glowOrange();
-void glowGreen();
 void glowRed();
-void airQuality();
-void waterON();
-void waterOFF();
-void getBMEVal();
-int SoilReading();
+int getAirQuality();
+int getBMEtemp();
+int getBMEhumidity();
+int getSoilReading(int _pin);
 void screen();
+void waterPlant();
 void MQTT_connect();
+void adafruitSubscribe();
+void adafruitPublish();
 #line 12 "c:/Users/Arjun/Documents/IOT/SmartPlant/SmartPlant/src/SmartPlant.ino"
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
@@ -37,16 +39,7 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 #include <Adafruit_Sensor.h>
 #include <SPI.h>
 #include <Wire.h>
-
 Adafruit_BME280 bme; 
-
-// I2C
-                     // Adafruit_BME280 bme(BME_CS); // hardware SPI
-// Adafruit_BME280 bme(BME_CS, BME_MOSI, BME_MISO, BME_SCK); // software SPI
-
-// dust sensor library
-
-// Capacitive Soil Moisture Sensor
 
 // air quality sensor library
 #include "Air_Quality_Sensor.h"
@@ -79,7 +72,6 @@ String TimeOnly;
 #include <Adafruit_MQTT.h>
 
 // Global State (you don't need to change this!)
-
 TCPClient TheClient;
 
 // Setup the MQTT client class by passing in the WiFi client and MQTT server and login details.
@@ -114,17 +106,17 @@ const int WATER_PUMP = D11;
 const int NEOPIXELS = D2;
 
 //timers
-unsigned long airQualityTimer;
+
 unsigned long pumpTimer;
-unsigned long bmeTimer;
+
 unsigned long currentTime;
 unsigned long lastTime;
 unsigned long publishTime;
-bool needWater = true;
-bool timerStart = true;
+bool needWater = false;
+bool timerStart = false;
 unsigned long getDustTimer;
-unsigned long soilTimer;
 unsigned long waterButtonTimer;
+unsigned int waterTimer;
 
 
 // Dust Sensor Variables 
@@ -196,49 +188,37 @@ void setup() {
 
     // 
     bme.begin();
-
 }
 
 void loop() {
    // Validate connected to MQTT Broker
-    MQTT_connect();
+  MQTT_connect();
+
    // Ping MQTT Broker every 2 minutes to keep connection alive
-    if ((millis() - last) > 120000) {
-        Serial.printf("Pinging MQTT \n");
-        if (!mqtt.ping()) {
-            Serial.printf("Disconnecting \n");
-            mqtt.disconnect();
-        }
-        last = millis();
-    }
+  if ((millis() - last) > 120000) {
+    Serial.printf("Pinging MQTT \n");
+      if (!mqtt.ping()) {
+           Serial.printf("Disconnecting \n");
+           mqtt.disconnect();
+      }
+      last = millis();
+  }
+
+  quality = getAirQuality();
+  temp= getBMEtemp();
+  humidity= getBMEhumidity();
+  moisture= getSoilReading(SOIL_SENSOR);
   
-  // check Air Quality every 1 hour 
-  if(millis()-airQualityTimer > 30000){
-    airQuality();
-    airQualityTimer = millis();
-  }
-  // print BME Values every 60 seconds
-   if(millis()-bmeTimer > 60000){
-    getBMEVal();
-    bmeTimer = millis();
-  }
  
-// WaterPlant()
- if(needWater==true){  
-   waterON();
-   if (timerStart == true){
-     pumpTimer=millis();
-     timerStart=false;
-   }
-    if(millis()-pumpTimer > 300){
-      needWater=false;
-      if(needWater==false){
-        waterOFF();
-        glowBlue();
-        timerStart=true;
-      }  
-    }
- }
+
+if (moisture>3000 && (millis() - waterTimer) > 5000){
+      needWater= true;
+      timerStart=true;
+  waterTimer=millis();
+}
+
+ waterPlant();
+
  // Subscription Packages
   Adafruit_MQTT_Subscribe *subscription;
   // Water Plant Manually
@@ -273,16 +253,11 @@ void loop() {
             Serial.printf("Received %i from Adafruit.io feed pixel \n", LEDState);
             }
         }
-        if(subscription == &mqttCheckAir){
-            CheckAirState = atof((char*)mqttCheckAir.lastread);  
-            if (CheckAirState==true){
-            //Serial.printf("Received %i from Adafruit.io feed pixel \n", LEDState);
-            airQuality();
-            }
-        }
+
+
   }
  // publish to adafruit.io every 60 seconds
- if ((millis() - publishTime > 60000)) {
+ if ((millis() - publishTime > 15000)) {
         if (mqtt.Update()) {
           mqttSoilMoisture.publish(moisture);
           mqttAirQuality.publish(quality);
@@ -293,6 +268,8 @@ void loop() {
         }
         publishTime = millis();
     }
+
+
 
 // dust sensor every 90 seconds
 if (millis() - getDustTimer > 90000){
@@ -309,14 +286,6 @@ if (millis() - getDustTimer > 90000){
   getDustTimer = millis();
 }
 
-// get soil Reading
-// check if soil is less than desired moisture level every 30 minutes
-if (millis() - soilTimer > 100000){
- if (SoilReading() <3000){
-    //needWater= true;
- }
- soilTimer=millis();
-}
 
 // Current Time
     currentTime = millis();
@@ -334,7 +303,7 @@ if (millis() - soilTimer > 100000){
         screen();
     }
 }
-
+// lights neo pixels with any color | Utilize with dashboard for fun
 void glowColor(){
   int i;
   int j;
@@ -354,7 +323,7 @@ void glowColor(){
     }
 }
 
-// lights neo pixels with blue // utlize if plant has been watered
+// lights neo pixels with blue | utlize if plant has been watered
 void glowBlue(){
   int i;
   int j;
@@ -374,6 +343,27 @@ void glowBlue(){
     }
 }
 
+// lights neo pixels green | utlize if airquality is GREAT
+void glowGreen(){
+  int i;
+  int j;
+    for (j=0; j <75; j=j+2){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i, 0x0000FF);
+        pixel.setBrightness(j);
+        pixel.show(); 
+      }
+    }
+    for (j=75; j >-1; j=j-2){
+      for (i = 0; i < pixel.numPixels(); i++) {
+        pixel.setPixelColor(i, pixel.Color(0, 200, 0));
+        pixel.setBrightness(j);
+        pixel.show(); 
+      }
+    }
+}
+
+// lights neo pixels yellow | utlize if airquality is OK
 void glowYellow(){
   int i;
   int j;
@@ -393,6 +383,7 @@ void glowYellow(){
     }
 }
 
+// lights neo pixels yellow | utlize if airquality is BAD
 void glowOrange(){
   int i;
   int j;
@@ -411,26 +402,7 @@ void glowOrange(){
       }
     }
 }
-// utilize when 
-void glowGreen(){
-  int i;
-  int j;
-    for (j=0; j <75; j=j+2){
-      for (i = 0; i < pixel.numPixels(); i++) {
-        pixel.setPixelColor(i, 0x0000FF);
-        pixel.setBrightness(j);
-        pixel.show(); 
-      }
-    }
-    for (j=75; j >-1; j=j-2){
-      for (i = 0; i < pixel.numPixels(); i++) {
-        pixel.setPixelColor(i, pixel.Color(0, 200, 0));
-        pixel.setBrightness(j);
-        pixel.show(); 
-      }
-    }
-}
-// utlize this if air quality is bad
+// lights neo pixels yellow | utlize if airquality is HORRIBLE
 void glowRed(){
   int i;
   int j;
@@ -450,51 +422,71 @@ void glowRed(){
     }
 }
 
-void airQuality(){
+int getAirQuality(){
+  static int _airReading;
+  static int _quality;
+  static unsigned int _airQualityTimer;
 
-
-  quality = sensor.slope();
-  Serial.print("Sensor value: ");
-  Serial.println(sensor.getValue());
-
-  if (quality == AirQualitySensor::FORCE_SIGNAL) {
+  if(millis()-_airQualityTimer > 3000){
+    
+  _quality = sensor.slope();
+  //Serial.print("Sensor value: ");
+  //Serial.println(sensor.getValue());
+  _airReading= sensor.getValue();
+  if (_quality == AirQualitySensor::FORCE_SIGNAL) {
     Serial.println("High pollution! Force signal active.");
-    glowRed();
+    //glowRed();
   }
-  else if (quality == AirQualitySensor::HIGH_POLLUTION) {
+  else if (_quality == AirQualitySensor::HIGH_POLLUTION) {
     Serial.println("High pollution!");
-    glowOrange();
+    //glowOrange();
   }
-  else if (quality == AirQualitySensor::LOW_POLLUTION) {
+  else if (_quality == AirQualitySensor::LOW_POLLUTION) {
     Serial.println("Low pollution!");
-    glowYellow();  
+    //glowYellow();  
     }
-  else if (quality == AirQualitySensor::FRESH_AIR) {
+  else if (_quality == AirQualitySensor::FRESH_AIR) {
     Serial.println("Fresh air.");
-    glowGreen();
+    //glowGreen();
   }
+   _airQualityTimer = millis();
+  }
+  return _airReading;
 }
 
-void waterON(){
-digitalWrite(WATER_PUMP, HIGH);
+int getBMEtemp(){
+  static unsigned int _bmeTimerTemp;
+  static int _temp;
+  unsigned int _updateTime = 30000;
+    if(millis()-_bmeTimerTemp > _updateTime){
+      _temp = ((bme.readTemperature()*(1.8))+32);
+      _bmeTimerTemp= millis();
+    }
+    return _temp;
 }
 
-void waterOFF(){
-digitalWrite(WATER_PUMP, LOW);
+int getBMEhumidity(){
+  static unsigned int _bmeTimerHumidity;
+  static int _humidity;
+  unsigned int _updateTime = 30000;
+
+    if(millis()-_bmeTimerHumidity > _updateTime){
+      _humidity = bme.readHumidity();
+     _bmeTimerHumidity= millis();
+    }
+    return _humidity;
 }
 
-void getBMEVal(){
+int getSoilReading(int _pin){
+  static unsigned int _soilTimer;
+  static int _moisture;
+  unsigned int _updateTimeSoil = 3000;
 
-    temp = ((bme.readTemperature()*(1.8))+32);
-    humidity = bme.readHumidity();
-    //Serial.printf("Temperature F = %i, Humididty= %i %",temp,humidity);
-    //
-}
-
-int SoilReading(){
-  moisture=analogRead(SOIL_SENSOR);
-  return moisture;
-  //Serial.printf("%i \n", moisture);
+  if (millis() - _soilTimer > _updateTimeSoil){
+    _moisture=analogRead(_pin);
+    _soilTimer=millis();
+  }
+  return _moisture;
 }
 
 void screen() {
@@ -509,6 +501,25 @@ void screen() {
     display.printf("SoilMoisture= %i\n", moisture);
     display.printf("dust = %f pcs/0.01cf \n",concentration);
     display.display();
+}
+
+void waterPlant(){
+
+if(needWater==true){  
+ digitalWrite(WATER_PUMP, HIGH);
+   if (timerStart == true){
+     pumpTimer=millis();
+     timerStart=false;
+   }
+    if(millis()-pumpTimer > 300){
+      needWater=false;
+      if(needWater==false){
+        digitalWrite(WATER_PUMP, LOW);
+        glowBlue();
+        timerStart=true;
+      }  
+    }
+ }
 }
 
 void MQTT_connect() {
@@ -530,5 +541,8 @@ void MQTT_connect() {
     Serial.printf("MQTT Connected!\n");
 }
 
+void adafruitSubscribe(){
+}
 
-// void zapier()// have Zapier connect to  an app
+void adafruitPublish(){
+}
